@@ -1,0 +1,246 @@
+{
+  "name": "AI Email Campaign Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Status",
+              "lookupValue": "Pending"
+            }
+          ]
+        },
+        "options": {
+          "returnFirstMatch": false
+        }
+      },
+      "id": "get-leads",
+      "name": "Get Pending Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [460, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an expert B2B copywriter. Write a short, personalized cold email that feels human — not salesy.\n\nRules:\n- Subject line: curiosity-driven, under 8 words\n- Body: 4-5 sentences max\n- Mention something specific about their company\n- One clear CTA (15-min call or reply)\n- No buzzwords, no fluff\n\nReturn ONLY a JSON object with: subject, body. No markdown.",
+              "role": "system"
+            },
+            {
+              "content": "=Recipient name: {{ $json.First_Name }} {{ $json.Last_Name }}\nCompany: {{ $json.Company }}\nRole: {{ $json.Role || 'Decision Maker' }}\nIndustry: {{ $json.Industry || 'Business' }}\nCompany info: {{ $json.Notes || 'Growing company' }}\n\nSender: {{ $json.Sender_Name || 'Alex' }}\nProduct/Service: {{ $json.Product || 'AI automation systems' }}\n\nWrite a personalized cold email."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 400
+        }
+      },
+      "id": "generate-email",
+      "name": "Generate Personalized Email",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": {
+        "openAiApi": {
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const aiText = $input.first().json.message?.content || '{}';\nlet email = {};\n\ntry {\n  email = JSON.parse(aiText);\n} catch(e) {\n  const clean = aiText.replace(/```json|```/g, '').trim();\n  try {\n    email = JSON.parse(clean);\n  } catch(e2) {\n    email = {\n      subject: 'Quick question about ' + ($('Get Pending Leads').first().json.Company || 'your business'),\n      body: aiText\n    };\n  }\n}\n\nconst lead = $('Get Pending Leads').first().json;\n\nreturn [{\n  json: {\n    to: lead.Email,\n    firstName: lead.First_Name,\n    lastName: lead.Last_Name,\n    company: lead.Company,\n    subject: email.subject || 'Quick question',\n    body: email.body || '',\n    rowTopic: lead.Company,\n    sentAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "parse-email",
+      "name": "Parse Email Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.body }}",
+        "options": {
+          "senderName": "YOUR_SENDER_NAME"
+        }
+      },
+      "id": "send-email",
+      "name": "Send via Gmail",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1120, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "Sent",
+            "Subject_Sent": "={{ $('Parse Email Content').first().json.subject }}",
+            "Email_Body": "={{ $('Parse Email Content').first().json.body }}",
+            "Sent_At": "={{ $('Parse Email Content').first().json.sentAt }}"
+          },
+          "matchingColumns": ["Email"],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "update-status",
+      "name": "Update Lead Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1340, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Wait 30-60 seconds between emails to avoid spam filters\nconst delay = Math.floor(Math.random() * 30000) + 30000;\nawait new Promise(resolve => setTimeout(resolve, delay));\nreturn $input.all();"
+      },
+      "id": "rate-limit",
+      "name": "Rate Limiter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 500]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Pending Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pending Leads": {
+      "main": [
+        [
+          {
+            "node": "Generate Personalized Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Personalized Email": {
+      "main": [
+        [
+          {
+            "node": "Parse Email Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Email Content": {
+      "main": [
+        [
+          {
+            "node": "Send via Gmail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via Gmail": {
+      "main": [
+        [
+          {
+            "node": "Update Lead Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": "ai-email-campaign-v1"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "AI",
+      "createdAt": "2026-04-17T00:00:00.000Z"
+    },
+    {
+      "name": "Email",
+      "createdAt": "2026-04-17T00:00:00.000Z"
+    },
+    {
+      "name": "Automation",
+      "createdAt": "2026-04-17T00:00:00.000Z"
+    }
+  ]
+}
